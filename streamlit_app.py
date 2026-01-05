@@ -3,7 +3,6 @@ import streamlit as st
 import requests
 import json
 from datetime import datetime
-import base64
 import urllib.parse
 from typing import Dict, List, Optional
 
@@ -41,393 +40,410 @@ st.markdown("""
         border-radius: 5px;
         margin: 10px 0;
     }
+    .parameter-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 10px 0;
+    }
+    .parameter-table td {
+        border: 1px solid #ddd;
+        padding: 8px;
+    }
+    .parameter-table tr:nth-child(even) {
+        background-color: #f2f2f2;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-def decode_url_data(encoded_data: str) -> Optional[Dict]:
-    """解码URL参数中的数据"""
-    try:
-        # 先进行URL解码
-        decoded_url = urllib.parse.unquote(encoded_data)
-        
-        # 然后进行Base64解码
-        padding = 4 - len(decoded_url) % 4
-        if padding != 4:
-            decoded_url += "=" * padding
-        
-        # 替换URL安全的base64字符
-        decoded_url = decoded_url.replace('-', '+').replace('_', '/')
-        
-        # 解码base64
-        json_bytes = base64.b64decode(decoded_url)
-        json_str = json_bytes.decode('utf-8')
-        
-        return json.loads(json_str)
-    except Exception as e:
-        st.error(f"数据解码失败: {str(e)}")
-        return None
-
-def load_dify_data():
-    """从URL参数加载Dify发送的数据"""
-    # 获取查询参数
+def load_query_parameters():
+    """从URL查询参数加载Dify发送的数据"""
     query_params = st.experimental_get_query_params()
     
-    if 'data' in query_params:
-        encoded_data = query_params['data'][0]
-        return decode_url_data(encoded_data)
+    employee_data = {}
     
-    return None
+    # 从查询参数中提取员工信息
+    if query_params:
+        # 基本信息
+        employee_data = {
+            "id": query_params.get("employee_id", [""])[0] or f"EMP{datetime.now().strftime('%H%M%S')}",
+            "name": query_params.get("name", [""])[0],
+            "gender": query_params.get("gender", [""])[0],
+            "age": query_params.get("age", [""])[0],
+            "employee_type": query_params.get("employee_type", ["白领"])[0],
+            "qualification": query_params.get("qualification", [""])[0],
+            "branch": query_params.get("branch", [""])[0],
+            "manager_name": query_params.get("manager_name", [""])[0],
+            "manager_email": query_params.get("manager_email", [""])[0],
+            "status": "pending"
+        }
+        
+        # Dify回调信息
+        dify_info = {
+            "callback_url": query_params.get("callback_url", [""])[0],
+            "api_key": query_params.get("api_key", [""])[0],
+            "workflow_run_id": query_params.get("workflow_run_id", [""])[0],
+            "action": query_params.get("action", ["manager_approval"])[0]
+        }
+        
+        # 尝试解析年龄为浮点数
+        try:
+            employee_data["age"] = float(employee_data["age"])
+        except:
+            employee_data["age"] = 0.0
+    
+    return employee_data, dify_info if employee_data["name"] else (None, None)
 
-def initialize_session_state():
-    """初始化session state"""
-    if 'dify_data' not in st.session_state:
-        st.session_state.dify_data = None
-    if 'approval_history' not in st.session_state:
-        st.session_state.approval_history = []
-    if 'employee_choices' not in st.session_state:
-        st.session_state.employee_choices = {}
-
-def display_data_info(dify_data: Dict):
-    """显示Dify数据信息"""
-    with st.sidebar.expander("📦 数据信息", expanded=True):
+def display_parameter_info(query_params):
+    """显示接收到的参数信息"""
+    with st.sidebar.expander("📊 接收的参数", expanded=True):
         st.markdown(f"""
         <div class="data-info">
-        <p><strong>数据来源:</strong> Dify Workflow</p>
-        <p><strong>员工数量:</strong> {len(dify_data.get('employees', []))}</p>
-        <p><strong>接收时间:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><strong>参数数量:</strong> {len(query_params)}</p>
+        <p><strong>接收时间:</strong> {datetime.now().strftime('%H:%M:%S')}</p>
         </div>
         """, unsafe_allow_html=True)
         
-        if 'workflow_run_id' in dify_data:
-            st.code(f"Workflow ID: {dify_data['workflow_run_id']}")
-        
-        # 显示原始数据（调试用）
-        if st.checkbox("显示原始数据"):
-            st.json(dify_data)
-
-def render_employee_card(emp: Dict, index: int):
-    """渲染员工审批卡片"""
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        status_class = "approved" if emp.get('status') == 'approved' else "pending"
-        approval_status = ""
-        
-        if emp.get('status') == 'approved':
-            approval_status = f"<p><strong>✅ 已审批:</strong> {emp.get('approved_choice', '')}</p>"
-        
-        st.markdown(f"""
-        <div class='approval-card {status_class}'>
-            <h3>{emp['name']} ({emp['gender']}, {emp['age']}岁)</h3>
-            <p><strong>员工ID:</strong> {emp['id']}</p>
-            <p><strong>员工类型:</strong> {emp['employee_type']}</p>
-            <p><strong>符合条件:</strong> {emp['qualification']}</p>
-            <p><strong>对应经理:</strong> {emp['manager_name']} ({emp['manager_email']})</p>
-            <p><strong>分支:</strong> {emp['branch']}</p>
-            {approval_status}
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        if emp.get('status') != 'approved':
-            st.markdown("### 选择方案")
+        if query_params:
+            st.markdown("### 参数详情")
             
-            # 根据分支显示不同选项
-            if emp['branch'] == '123':
-                options = ["Flexible retirement", "Retire at legal age", "Rehire"]
-            else:
-                options = ["待定方案1", "待定方案2", "待定方案3"]
+            # 创建参数表格
+            param_table = "<table class='parameter-table'>"
+            param_table += "<tr><td><strong>参数名</strong></td><td><strong>参数值</strong></td></tr>"
             
-            # 创建选择框
-            choice_key = f"choice_{emp['id']}_{index}"
-            
-            if choice_key not in st.session_state.employee_choices:
-                st.session_state.employee_choices[choice_key] = None
-            
-            option = st.selectbox(
-                "请选择方案:",
-                options,
-                key=choice_key,
-                index=None,
-                placeholder="选择审批方案..."
-            )
-            
-            # 提交按钮
-            if st.button(f"提交审批", key=f"submit_{emp['id']}_{index}"):
-                if option:
-                    # 模拟提交到Dify
-                    st.session_state.employee_choices[choice_key] = option
-                    emp['status'] = 'approved'
-                    emp['approved_choice'] = option
-                    emp['approved_time'] = datetime.now().isoformat()
-                    
-                    # 添加到历史记录
-                    st.session_state.approval_history.append({
-                        "employee_id": emp['id'],
-                        "employee_name": emp['name'],
-                        "choice": option,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
-                    
-                    st.success(f"✅ 已提交 {emp['name']} 的审批: {option}")
-                    st.rerun()
+            for key, values in query_params.items():
+                # 对于敏感信息（如api_key）进行部分隐藏
+                if key in ['api_key', 'password', 'token'] and values[0]:
+                    display_value = values[0][:4] + "****" + values[0][-4:] if len(values[0]) > 8 else "****"
                 else:
-                    st.warning("请先选择审批方案")
-        else:
-            st.success("✅ 已审批")
-            st.info(f"方案: {emp.get('approved_choice', '未知')}")
+                    display_value = values[0] if values else ""
+                
+                param_table += f"<tr><td>{key}</td><td>{display_value}</td></tr>"
+            
+            param_table += "</table>"
+            st.markdown(param_table, unsafe_allow_html=True)
+            
+            # 显示原始URL
+            if st.checkbox("显示原始查询字符串"):
+                param_string = "&".join([f"{k}={v[0]}" for k, v in query_params.items() if v[0]])
+                st.code(f"?{param_string}")
 
-def send_approval_to_dify(employee_data: Dict, choice: str) -> bool:
-    """发送审批结果回Dify（模拟实现）"""
-    dify_data = st.session_state.dify_data
+def render_single_employee_card(emp: Dict, dify_info: Dict):
+    """渲染单个员工审批卡片"""
+    st.header("📝 员工退休方案审批")
     
-    if not dify_data or 'callback_url' not in dify_data:
-        st.error("缺少Dify回调配置")
-        return False
+    with st.container():
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            status_class = "approved" if emp.get('status') == 'approved' else "pending"
+            
+            st.markdown(f"""
+            <div class='approval-card {status_class}'>
+                <h2>{emp['name']} ({emp['gender']}, {emp['age']}岁)</h2>
+                <p><strong>员工ID:</strong> {emp['id']}</p>
+                <p><strong>员工类型:</strong> {emp['employee_type']}</p>
+                <p><strong>符合条件:</strong> {emp['qualification']}</p>
+                <p><strong>对应经理:</strong> {emp['manager_name']} ({emp['manager_email']})</p>
+                <p><strong>分支:</strong> {emp['branch']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            if emp.get('status') != 'approved':
+                st.markdown("### 选择审批方案")
+                
+                # 根据分支显示不同选项
+                if emp['branch'] == '123':
+                    options = ["Flexible retirement", "Retire at legal age", "Rehire"]
+                else:
+                    options = ["待定方案1", "待定方案2", "待定方案3"]
+                
+                # 创建选择框
+                choice = st.selectbox(
+                    "请选择方案:",
+                    options,
+                    key=f"choice_{emp['id']}",
+                    index=None,
+                    placeholder="选择审批方案..."
+                )
+                
+                # 审批理由输入
+                approval_reason = st.text_area(
+                    "审批理由（可选）",
+                    height=100,
+                    placeholder="请输入审批理由..."
+                )
+                
+                # 提交按钮
+                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                
+                with col_btn1:
+                    if st.button("✅ 批准", type="primary", use_container_width=True):
+                        if choice:
+                            submit_approval(emp, choice, approval_reason, dify_info, "approved")
+                        else:
+                            st.warning("请先选择审批方案")
+                
+                with col_btn2:
+                    if st.button("❌ 驳回", use_container_width=True):
+                        if choice:
+                            submit_approval(emp, choice, approval_reason, dify_info, "rejected")
+                        else:
+                            st.warning("请先选择审批方案")
+                
+                with col_btn3:
+                    if st.button("⏸️ 暂存", use_container_width=True):
+                        st.info("已暂存当前选择")
+                        
+                        # 保存到session state
+                        if 'draft_approvals' not in st.session_state:
+                            st.session_state.draft_approvals = []
+                        
+                        st.session_state.draft_approvals.append({
+                            "employee": emp,
+                            "choice": choice,
+                            "reason": approval_reason,
+                            "timestamp": datetime.now().isoformat()
+                        })
+            else:
+                st.success("✅ 已审批完成")
+                st.info(f"**方案:** {emp.get('approved_choice', '未知')}")
+                st.info(f"**理由:** {emp.get('approval_reason', '无')}")
+                st.info(f"**时间:** {emp.get('approved_time', '')}")
+                
+                if st.button("🔄 重新审批"):
+                    emp['status'] = 'pending'
+                    st.rerun()
+
+def submit_approval(employee: Dict, choice: str, reason: str, dify_info: Dict, status: str = "approved"):
+    """提交审批结果"""
     
-    callback_url = dify_data.get('callback_url')
-    api_key = dify_data.get('api_key')
+    # 更新员工状态
+    employee['status'] = status
+    employee['approved_choice'] = choice
+    employee['approval_reason'] = reason
+    employee['approved_time'] = datetime.now().isoformat()
     
-    if not callback_url or not api_key:
-        st.error("Dify回调配置不完整")
-        return False
+    # 保存到历史记录
+    if 'approval_history' not in st.session_state:
+        st.session_state.approval_history = []
+    
+    st.session_state.approval_history.append({
+        "employee_id": employee['id'],
+        "employee_name": employee['name'],
+        "choice": choice,
+        "reason": reason,
+        "status": status,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    
+    # 如果有Dify回调信息，发送到Dify
+    if dify_info.get('callback_url') and dify_info.get('api_key'):
+        send_to_dify(employee, choice, reason, status, dify_info)
+    
+    st.success(f"✅ 已提交审批: {choice} ({status})")
+    st.balloons()
+    
+    # 添加延迟，然后重新运行以更新界面
+    import time
+    time.sleep(1)
+    st.rerun()
+
+def send_to_dify(employee: Dict, choice: str, reason: str, status: str, dify_info: Dict):
+    """发送审批结果到Dify"""
+    
+    callback_url = dify_info['callback_url']
+    api_key = dify_info['api_key']
+    workflow_run_id = dify_info.get('workflow_run_id', '')
     
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
+    # 构建回调数据
     payload = {
-        "workflow_run_id": dify_data.get('workflow_run_id', 'unknown'),
+        "workflow_run_id": workflow_run_id,
         "inputs": {
-            "employee_id": employee_data['id'],
-            "employee_name": employee_data['name'],
+            "employee_id": employee['id'],
+            "employee_name": employee['name'],
             "approval_choice": choice,
-            "action": "manager_approval",
+            "approval_reason": reason,
+            "approval_status": status,
+            "action": dify_info.get('action', 'manager_approval'),
             "timestamp": datetime.now().isoformat()
         },
         "response_mode": "blocking"
     }
     
     try:
-        # 在实际使用中，取消注释下面的代码
+        # 在实际部署中，取消注释下面的代码
         # response = requests.post(callback_url, headers=headers, json=payload)
-        # if response.status_code == 200:
-        #     return True
-        # else:
-        #     st.error(f"提交失败: {response.text}")
-        #     return False
+        # response.raise_for_status()
         
-        # 模拟成功返回
-        st.info(f"📤 已发送到Dify: {employee_data['name']} - {choice}")
-        st.info(f"回调URL: {callback_url}")
+        # 显示回调信息（模拟）
+        with st.expander("📤 查看回调数据", expanded=True):
+            st.info(f"**回调URL:** {callback_url}")
+            st.info(f"**Workflow Run ID:** {workflow_run_id}")
+            st.json(payload)
+        
+        st.success(f"✅ 审批结果已发送到Dify Workflow")
         return True
+        
     except Exception as e:
-        st.error(f"连接错误: {str(e)}")
+        st.error(f"❌ 发送到Dify失败: {str(e)}")
+        
+        # 显示详细错误信息
+        with st.expander("🔍 错误详情"):
+            st.error(f"错误类型: {type(e).__name__}")
+            st.error(f"错误信息: {str(e)}")
+            st.info("**建议检查:**")
+            st.info("1. Dify API Key是否正确")
+            st.info("2. 回调URL是否可以访问")
+            st.info("3. 网络连接是否正常")
+        
         return False
+
+def show_approval_history():
+    """显示审批历史"""
+    if 'approval_history' in st.session_state and st.session_state.approval_history:
+        st.markdown("---")
+        st.header("📜 审批历史记录")
+        
+        for record in reversed(st.session_state.approval_history[-5:]):  # 只显示最近5条
+            status_color = "🟢" if record['status'] == 'approved' else "🔴"
+            
+            with st.expander(f"{status_color} {record['timestamp']} - {record['employee_name']}"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"**员工ID:** {record['employee_id']}")
+                    st.write(f"**审批状态:** {record['status']}")
+                    st.write(f"**选择方案:** {record['choice']}")
+                
+                with col2:
+                    st.write(f"**审批理由:** {record.get('reason', '无')}")
+                    
+                    # 显示操作按钮
+                    if st.button(f"复制结果", key=f"copy_{record['timestamp']}"):
+                        result_json = json.dumps(record, ensure_ascii=False, indent=2)
+                        st.code(result_json, language="json")
+                        st.info("已复制到剪贴板")
+
+def show_draft_approvals():
+    """显示暂存的审批"""
+    if 'draft_approvals' in st.session_state and st.session_state.draft_approvals:
+        st.markdown("---")
+        st.header("💾 暂存审批")
+        
+        for idx, draft in enumerate(st.session_state.draft_approvals):
+            with st.expander(f"暂存 {idx+1}: {draft['employee']['name']}"):
+                st.write(f"**员工:** {draft['employee']['name']}")
+                st.write(f"**方案:** {draft.get('choice', '未选择')}")
+                st.write(f"**理由:** {draft.get('reason', '无')}")
+                st.write(f"**暂存时间:** {draft['timestamp']}")
+                
+                if st.button(f"加载此暂存", key=f"load_draft_{idx}"):
+                    # 这里可以加载暂存的数据到当前表单
+                    st.info("加载暂存功能需要根据具体需求实现")
 
 def main():
     st.title("🏢 员工退休方案审批系统")
     st.markdown("---")
     
-    # 初始化session state
-    initialize_session_state()
-    
     # 侧边栏
-    st.sidebar.header("📅 审批信息")
-    batch_date = st.sidebar.date_input("审批日期", datetime.now())
+    st.sidebar.header("📅 系统信息")
+    st.sidebar.info(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 数据来源选择
-    data_source = st.sidebar.radio(
-        "数据来源:",
-        ["Dify请求", "手动输入"],
-        horizontal=True
-    )
+    # 从URL参数加载数据
+    employee_data, dify_info = load_query_parameters()
     
-    # 加载数据
-    if data_source == "Dify请求":
-        # 从URL参数加载Dify数据
-        if st.session_state.dify_data is None:
-            dify_data = load_dify_data()
-            if dify_data:
-                st.session_state.dify_data = dify_data
-                st.success("✅ 已成功加载Dify数据")
-            else:
-                # 显示如何使用
-                st.info("""
-                ### 如何从Dify接收数据：
-                
-                1. **在Dify Workflow中配置HTTP请求节点**
-                   - 方法: GET
-                   - URL: `https://blank-app-4hx917t663u.streamlit.app/?data=YOUR_BASE64_DATA`
-                
-                2. **数据格式示例：**
-                ```json
-                {
-                  "workflow_run_id": "workflow-123",
-                  "callback_url": "https://api.dify.ai/v1/workflows/run",
-                  "api_key": "your-api-key",
-                  "employees": [...]
-                }
-                ```
-                
-                3. **将数据Base64编码后添加到URL**
-                ```python
-                import base64, json, urllib.parse
-                
-                data = {...}
-                json_str = json.dumps(data)
-                base64_data = base64.b64encode(json_str.encode()).decode()
-                # 转换为URL安全格式
-                url_safe_data = base64_data.replace('+', '-').replace('/', '_')
-                url = f"https://blank-app-4hx917t663u.streamlit.app/?data={url_safe_data}"
-                ```
-                """)
-                
-                # 演示按钮
-                if st.button("加载演示数据"):
-                    demo_data = {
-                        "workflow_run_id": "demo-workflow-001",
-                        "callback_url": "https://api.dify.ai/v1/workflows/run",
-                        "api_key": "demo-api-key-123",
-                        "employees": [
-                            {
-                                "id": "EMP001",
-                                "name": "张三",
-                                "gender": "男",
-                                "age": 60.0,
-                                "employee_type": "白领",
-                                "manager_name": "张经理",
-                                "manager_email": "zhang.manager@company.com",
-                                "qualification": "男性 ≥59.5岁",
-                                "branch": "123",
-                                "status": "pending"
-                            },
-                            {
-                                "id": "EMP002",
-                                "name": "李四",
-                                "gender": "女",
-                                "age": 55.5,
-                                "employee_type": "蓝领",
-                                "manager_name": "李经理",
-                                "manager_email": "li.manager@company.com",
-                                "qualification": "女性 ≥54.5岁",
-                                "branch": "123",
-                                "status": "pending"
-                            }
-                        ]
-                    }
-                    st.session_state.dify_data = demo_data
-                    st.rerun()
-                
-                return
+    # 显示接收到的参数信息
+    query_params = st.experimental_get_query_params()
+    display_parameter_info(query_params)
+    
+    # 检查是否有数据
+    if not employee_data:
+        st.warning("等待Dify发送员工数据...")
         
-        dify_data = st.session_state.dify_data
+        st.info("""
+        ### 📋 如何从Dify接收数据：
         
-        # 显示数据信息
-        display_data_info(dify_data)
+        1. **在Dify Workflow中配置HTTP请求节点**
+           - 方法: GET
+           - 目标URL: `https://blank-app-4hx917t663u.streamlit.app`
         
-        # 获取员工列表
-        employees = dify_data.get('employees', [])
+        2. **在PARAMS中添加以下参数：**
+           ```
+           name=员工姓名
+           gender=性别
+           age=年龄
+           branch=分支代码
+           manager_name=经理姓名
+           manager_email=经理邮箱
+           callback_url=Dify回调URL（可选）
+           api_key=Dify API Key（可选）
+           workflow_run_id=工作流运行ID（可选）
+           ```
         
-    else:  # 手动输入
-        st.sidebar.header("⚙️ 手动配置")
-        callback_url = st.sidebar.text_input("Dify回调URL")
-        api_key = st.sidebar.text_input("API Key", type="password")
-        workflow_id = st.sidebar.text_input("Workflow ID")
+        3. **示例URL：**
+           ```
+           https://blank-app-4hx917t663u.streamlit.app/?name=李四&gender=女&age=55.5&branch=123&manager_name=李经理&manager_email=li.manager@company.com
+           ```
+        """)
         
-        # 演示员工数据
-        employees = [
-            {
-                "id": "EMP001",
-                "name": "测试员工",
-                "gender": "男",
-                "age": 60.0,
-                "employee_type": "白领",
-                "manager_name": "测试经理",
-                "manager_email": "test@company.com",
-                "qualification": "测试条件",
-                "branch": "123",
-                "status": "pending"
+        # 演示模式
+        if st.button("进入演示模式"):
+            # 设置演示数据
+            demo_params = {
+                "name": ["张三"],
+                "gender": ["男"],
+                "age": ["60.0"],
+                "employee_type": ["白领"],
+                "qualification": ["男性 ≥59.5岁"],
+                "branch": ["123"],
+                "manager_name": ["张经理"],
+                "manager_email": ["zhang.manager@company.com"],
+                "callback_url": ["https://api.dify.ai/v1/workflows/run"],
+                "api_key": ["app-demo-key-123456"],
+                "workflow_run_id": ["demo-workflow-001"]
             }
-        ]
-    
-    # 主界面
-    st.header("📋 待审批员工列表")
-    
-    if not employees:
-        st.warning("暂无待审批员工")
+            
+            # 设置查询参数
+            st.experimental_set_query_params(**demo_params)
+            st.rerun()
+        
+        # 显示历史记录（如果有）
+        show_approval_history()
+        show_draft_approvals()
+        
         return
     
-    # 显示员工列表
-    approved_count = 0
-    for idx, emp in enumerate(employees):
-        with st.container():
-            render_employee_card(emp, idx)
-            
-            # 统计已审批数量
-            if emp.get('status') == 'approved':
-                approved_count += 1
+    # 渲染审批界面
+    render_single_employee_card(employee_data, dify_info)
     
-    # 批量操作区域
-    st.markdown("---")
-    st.header("📤 批量操作")
+    # 显示历史记录
+    show_approval_history()
     
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("✅ 提交所有待审批", type="primary"):
-            pending_employees = [e for e in employees if e.get('status') != 'approved']
-            
-            if not pending_employees:
-                st.info("没有待审批的员工")
-                return
-            
-            approvals = []
-            for emp in pending_employees:
-                choice_key = f"choice_{emp['id']}_0"
-                choice = st.session_state.employee_choices.get(choice_key)
-                if choice:
-                    approvals.append({
-                        "employee_id": emp['id'],
-                        "employee_name": emp['name'],
-                        "choice": choice,
-                        "timestamp": datetime.now().isoformat()
-                    })
-            
-            if approvals:
-                st.success(f"准备提交 {len(approvals)} 条审批")
-                st.json(approvals)
-                
-                # 在实际使用中，这里应该调用批量发送到Dify的函数
-                if data_source == "Dify请求" and dify_data:
-                    st.info("在实际部署中，这里会批量发送到Dify")
-            else:
-                st.warning("请先为待审批员工选择方案")
-    
-    with col2:
-        st.metric("待审批", len([e for e in employees if e.get('status') != 'approved']))
-    
-    with col3:
-        st.metric("已审批", approved_count)
-    
-    # 审批历史
-    if st.session_state.approval_history:
-        st.markdown("---")
-        st.header("📜 审批历史")
-        
-        for record in st.session_state.approval_history:
-            with st.expander(f"{record['timestamp']} - {record['employee_name']}"):
-                st.write(f"**员工ID:** {record['employee_id']}")
-                st.write(f"**选择方案:** {record['choice']}")
+    # 显示暂存审批
+    show_draft_approvals()
     
     # 调试信息
-    with st.sidebar.expander("🔧 调试信息"):
-        st.write(f"Session状态: {list(st.session_state.keys())}")
-        if st.button("清除数据"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+    with st.sidebar.expander("🔧 调试选项"):
+        if st.button("清除所有数据"):
+            keys_to_clear = ['approval_history', 'draft_approvals']
+            for key in keys_to_clear:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.experimental_set_query_params()
+            st.success("数据已清除")
             st.rerun()
+        
+        if st.button("查看当前session状态"):
+            st.write("当前session keys:", list(st.session_state.keys()))
+            
+            if 'approval_history' in st.session_state:
+                st.write("审批历史:", st.session_state.approval_history)
 
 if __name__ == "__main__":
     main()
