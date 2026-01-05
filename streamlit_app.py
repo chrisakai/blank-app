@@ -57,44 +57,54 @@ st.markdown("""
 
 def load_query_parameters():
     """从URL查询参数加载Dify发送的数据"""
-    query_params = st.experimental_get_query_params()
+    # 使用新的query_params API
+    query_params = st.query_params.to_dict()
     
     employee_data = {}
     
-    # 从查询参数中提取员工信息
+    # 检查是否有必要的参数
     if query_params:
-        # 基本信息
+        # 基本信息 - 使用get方法避免KeyError
+        name = query_params.get("name", "")
+        
+        # 如果连name都没有，说明是健康检查或无效请求
+        if not name:
+            return None, None
+        
         employee_data = {
-            "id": query_params.get("employee_id", [""])[0] or f"EMP{datetime.now().strftime('%H%M%S')}",
-            "name": query_params.get("name", [""])[0],
-            "gender": query_params.get("gender", [""])[0],
-            "age": query_params.get("age", [""])[0],
-            "employee_type": query_params.get("employee_type", ["白领"])[0],
-            "qualification": query_params.get("qualification", [""])[0],
-            "branch": query_params.get("branch", [""])[0],
-            "manager_name": query_params.get("manager_name", [""])[0],
-            "manager_email": query_params.get("manager_email", [""])[0],
+            "id": query_params.get("employee_id", f"EMP{datetime.now().strftime('%H%M%S')}"),
+            "name": name,
+            "gender": query_params.get("gender", ""),
+            "age": query_params.get("age", ""),
+            "employee_type": query_params.get("employee_type", "白领"),
+            "qualification": query_params.get("qualification", ""),
+            "branch": query_params.get("branch", ""),
+            "manager_name": query_params.get("manager_name", ""),
+            "manager_email": query_params.get("manager_email", ""),
             "status": "pending"
         }
         
         # Dify回调信息
         dify_info = {
-            "callback_url": query_params.get("callback_url", [""])[0],
-            "api_key": query_params.get("api_key", [""])[0],
-            "workflow_run_id": query_params.get("workflow_run_id", [""])[0],
-            "action": query_params.get("action", ["manager_approval"])[0]
+            "callback_url": query_params.get("callback_url", ""),
+            "api_key": query_params.get("api_key", ""),
+            "workflow_run_id": query_params.get("workflow_run_id", ""),
+            "action": query_params.get("action", "manager_approval")
         }
         
         # 尝试解析年龄为浮点数
         try:
             employee_data["age"] = float(employee_data["age"])
-        except:
+        except (ValueError, TypeError):
             employee_data["age"] = 0.0
     
-    return employee_data, dify_info if employee_data["name"] else (None, None)
+    return employee_data if employee_data.get("name") else None, dify_info if employee_data.get("name") else None
 
 def display_parameter_info(query_params):
     """显示接收到的参数信息"""
+    if not query_params:
+        return
+    
     with st.sidebar.expander("📊 接收的参数", expanded=True):
         st.markdown(f"""
         <div class="data-info">
@@ -103,29 +113,28 @@ def display_parameter_info(query_params):
         </div>
         """, unsafe_allow_html=True)
         
-        if query_params:
-            st.markdown("### 参数详情")
+        st.markdown("### 参数详情")
+        
+        # 创建参数表格
+        param_table = "<table class='parameter-table'>"
+        param_table += "<tr><td><strong>参数名</strong></td><td><strong>参数值</strong></td></tr>"
+        
+        for key, value in query_params.items():
+            # 对于敏感信息进行部分隐藏
+            if key in ['api_key', 'password', 'token'] and value:
+                display_value = value[:4] + "****" + value[-4:] if len(value) > 8 else "****"
+            else:
+                display_value = value if value else ""
             
-            # 创建参数表格
-            param_table = "<table class='parameter-table'>"
-            param_table += "<tr><td><strong>参数名</strong></td><td><strong>参数值</strong></td></tr>"
-            
-            for key, values in query_params.items():
-                # 对于敏感信息（如api_key）进行部分隐藏
-                if key in ['api_key', 'password', 'token'] and values[0]:
-                    display_value = values[0][:4] + "****" + values[0][-4:] if len(values[0]) > 8 else "****"
-                else:
-                    display_value = values[0] if values else ""
-                
-                param_table += f"<tr><td>{key}</td><td>{display_value}</td></tr>"
-            
-            param_table += "</table>"
-            st.markdown(param_table, unsafe_allow_html=True)
-            
-            # 显示原始URL
-            if st.checkbox("显示原始查询字符串"):
-                param_string = "&".join([f"{k}={v[0]}" for k, v in query_params.items() if v[0]])
-                st.code(f"?{param_string}")
+            param_table += f"<tr><td>{key}</td><td>{display_value}</td></tr>"
+        
+        param_table += "</table>"
+        st.markdown(param_table, unsafe_allow_html=True)
+        
+        # 显示原始URL
+        if st.checkbox("显示原始查询字符串"):
+            param_string = "&".join([f"{k}={urllib.parse.quote(str(v))}" for k, v in query_params.items() if v])
+            st.code(f"?{param_string}")
 
 def render_single_employee_card(emp: Dict, dify_info: Dict):
     """渲染单个员工审批卡片"""
@@ -153,7 +162,7 @@ def render_single_employee_card(emp: Dict, dify_info: Dict):
                 st.markdown("### 选择审批方案")
                 
                 # 根据分支显示不同选项
-                if emp['branch'] == '123':
+                if emp.get('branch') == '123':
                     options = ["Flexible retirement", "Retire at legal age", "Rehire"]
                 else:
                     options = ["待定方案1", "待定方案2", "待定方案3"]
@@ -171,28 +180,29 @@ def render_single_employee_card(emp: Dict, dify_info: Dict):
                 approval_reason = st.text_area(
                     "审批理由（可选）",
                     height=100,
-                    placeholder="请输入审批理由..."
+                    placeholder="请输入审批理由...",
+                    key=f"reason_{emp['id']}"
                 )
                 
                 # 提交按钮
                 col_btn1, col_btn2, col_btn3 = st.columns(3)
                 
                 with col_btn1:
-                    if st.button("✅ 批准", type="primary", use_container_width=True):
+                    if st.button("✅ 批准", type="primary", use_container_width=True, key=f"approve_{emp['id']}"):
                         if choice:
                             submit_approval(emp, choice, approval_reason, dify_info, "approved")
                         else:
                             st.warning("请先选择审批方案")
                 
                 with col_btn2:
-                    if st.button("❌ 驳回", use_container_width=True):
+                    if st.button("❌ 驳回", use_container_width=True, key=f"reject_{emp['id']}"):
                         if choice:
                             submit_approval(emp, choice, approval_reason, dify_info, "rejected")
                         else:
                             st.warning("请先选择审批方案")
                 
                 with col_btn3:
-                    if st.button("⏸️ 暂存", use_container_width=True):
+                    if st.button("⏸️ 暂存", use_container_width=True, key=f"save_{emp['id']}"):
                         st.info("已暂存当前选择")
                         
                         # 保存到session state
@@ -211,7 +221,7 @@ def render_single_employee_card(emp: Dict, dify_info: Dict):
                 st.info(f"**理由:** {emp.get('approval_reason', '无')}")
                 st.info(f"**时间:** {emp.get('approved_time', '')}")
                 
-                if st.button("🔄 重新审批"):
+                if st.button("🔄 重新审批", key=f"reapprove_{emp['id']}"):
                     emp['status'] = 'pending'
                     st.rerun()
 
@@ -238,15 +248,13 @@ def submit_approval(employee: Dict, choice: str, reason: str, dify_info: Dict, s
     })
     
     # 如果有Dify回调信息，发送到Dify
-    if dify_info.get('callback_url') and dify_info.get('api_key'):
+    if dify_info and dify_info.get('callback_url') and dify_info.get('api_key'):
         send_to_dify(employee, choice, reason, status, dify_info)
     
     st.success(f"✅ 已提交审批: {choice} ({status})")
     st.balloons()
     
-    # 添加延迟，然后重新运行以更新界面
-    import time
-    time.sleep(1)
+    # 重新运行以更新界面
     st.rerun()
 
 def send_to_dify(employee: Dict, choice: str, reason: str, status: str, dify_info: Dict):
@@ -310,10 +318,13 @@ def show_approval_history():
         st.markdown("---")
         st.header("📜 审批历史记录")
         
-        for record in reversed(st.session_state.approval_history[-5:]):  # 只显示最近5条
+        # 只显示最近5条
+        recent_history = list(reversed(st.session_state.approval_history[-5:]))
+        
+        for idx, record in enumerate(recent_history):
             status_color = "🟢" if record['status'] == 'approved' else "🔴"
             
-            with st.expander(f"{status_color} {record['timestamp']} - {record['employee_name']}"):
+            with st.expander(f"{status_color} {record['timestamp']} - {record['employee_name']}", expanded=idx==0):
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -325,10 +336,9 @@ def show_approval_history():
                     st.write(f"**审批理由:** {record.get('reason', '无')}")
                     
                     # 显示操作按钮
-                    if st.button(f"复制结果", key=f"copy_{record['timestamp']}"):
+                    if st.button(f"复制结果", key=f"copy_{idx}"):
                         result_json = json.dumps(record, ensure_ascii=False, indent=2)
                         st.code(result_json, language="json")
-                        st.info("已复制到剪贴板")
 
 def show_draft_approvals():
     """显示暂存的审批"""
@@ -344,7 +354,6 @@ def show_draft_approvals():
                 st.write(f"**暂存时间:** {draft['timestamp']}")
                 
                 if st.button(f"加载此暂存", key=f"load_draft_{idx}"):
-                    # 这里可以加载暂存的数据到当前表单
                     st.info("加载暂存功能需要根据具体需求实现")
 
 def main():
@@ -359,8 +368,9 @@ def main():
     employee_data, dify_info = load_query_parameters()
     
     # 显示接收到的参数信息
-    query_params = st.experimental_get_query_params()
-    display_parameter_info(query_params)
+    query_params = st.query_params.to_dict()
+    if query_params:
+        display_parameter_info(query_params)
     
     # 检查是否有数据
     if not employee_data:
@@ -394,28 +404,35 @@ def main():
         
         # 演示模式
         if st.button("进入演示模式"):
-            # 设置演示数据
+            # 设置演示查询参数
             demo_params = {
-                "name": ["张三"],
-                "gender": ["男"],
-                "age": ["60.0"],
-                "employee_type": ["白领"],
-                "qualification": ["男性 ≥59.5岁"],
-                "branch": ["123"],
-                "manager_name": ["张经理"],
-                "manager_email": ["zhang.manager@company.com"],
-                "callback_url": ["https://api.dify.ai/v1/workflows/run"],
-                "api_key": ["app-demo-key-123456"],
-                "workflow_run_id": ["demo-workflow-001"]
+                "name": "张三",
+                "gender": "男",
+                "age": "60.0",
+                "employee_type": "白领",
+                "qualification": "男性 ≥59.5岁",
+                "branch": "123",
+                "manager_name": "张经理",
+                "manager_email": "zhang.manager@company.com",
+                "callback_url": "https://api.dify.ai/v1/workflows/run",
+                "api_key": "app-demo-key-123456",
+                "workflow_run_id": "demo-workflow-001"
             }
             
-            # 设置查询参数
-            st.experimental_set_query_params(**demo_params)
+            # 更新查询参数
+            for key, value in demo_params.items():
+                st.query_params[key] = value
+            
+            # 重新运行应用
             st.rerun()
         
         # 显示历史记录（如果有）
         show_approval_history()
         show_draft_approvals()
+        
+        # 显示当前的查询参数（调试用）
+        with st.sidebar.expander("🔧 当前查询参数"):
+            st.json(query_params)
         
         return
     
@@ -431,11 +448,16 @@ def main():
     # 调试信息
     with st.sidebar.expander("🔧 调试选项"):
         if st.button("清除所有数据"):
+            # 清除session state
             keys_to_clear = ['approval_history', 'draft_approvals']
             for key in keys_to_clear:
                 if key in st.session_state:
                     del st.session_state[key]
-            st.experimental_set_query_params()
+            
+            # 清除查询参数
+            for key in list(st.query_params.keys()):
+                del st.query_params[key]
+            
             st.success("数据已清除")
             st.rerun()
         
@@ -444,6 +466,19 @@ def main():
             
             if 'approval_history' in st.session_state:
                 st.write("审批历史:", st.session_state.approval_history)
+        
+        # 显示测试URL
+        st.markdown("---")
+        st.markdown("### 测试URL示例")
+        test_url = "https://blank-app-4hx917t663u.streamlit.app/?name=李四&gender=女&age=55.5&branch=123&manager_name=李经理&manager_email=li.manager@company.com"
+        st.code(test_url)
 
 if __name__ == "__main__":
+    # 初始化session state
+    if 'approval_history' not in st.session_state:
+        st.session_state.approval_history = []
+    
+    if 'draft_approvals' not in st.session_state:
+        st.session_state.draft_approvals = []
+    
     main()
